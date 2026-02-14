@@ -14,12 +14,13 @@ async function getDoc() {
   return doc;
 }
 
-// GET: 記事一覧の取得 (変更なし)
+// GET: 記事一覧 ＋ 今日の成績を取得
 export async function GET() {
   const doc = await getDoc();
-  const sheet = doc.sheetsByIndex[0]; // 1枚目のシート
+  
+  // 1. 記事一覧を取得 (シート1)
+  const sheet = doc.sheetsByIndex[0];
   const rows = await sheet.getRows();
-
   const articles = rows.map((row) => ({
     id: row.get('id'),
     title: row.get('title'),
@@ -29,23 +30,39 @@ export async function GET() {
     gameData: row.get('game_data') ? JSON.parse(row.get('game_data')) : null,
   }));
 
-  return NextResponse.json(articles);
+  // 2. 今日の成績を集計 (シート2)
+  const logSheet = doc.sheetsByIndex[1];
+  const logRows = await logSheet.getRows();
+  
+  // --- 修正後 (日本時間 JST 対応) ---
+  const now = new Date();
+  // 9時間 (9 * 60分 * 60秒 * 1000ミリ秒) を足してJSTにする
+  const jstDate = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const today = jstDate.toISOString().split('T')[0];
+  
+  // 今日のログだけ抽出
+  const todayLogs = logRows.filter(r => r.get('date') === today);
+
+  const dailyStats = {
+    papers: todayLogs.length,
+    sentences: todayLogs.reduce((sum, r) => sum + Number(r.get('count_sentences') || 0), 0),
+    words: todayLogs.reduce((sum, r) => sum + Number(r.get('count_words') || 0), 0),
+  };
+
+  return NextResponse.json({ articles, dailyStats });
 }
 
-// POST: 完了データの書き込み (大幅変更)
+// POST: 変更なし (前回のコードのまま)
 export async function POST(req: Request) {
   const body = await req.json();
-  const { id, title, purpose, methods, results, memo, stats } = body; // 受け取るデータを追加
+  const { id, title, purpose, methods, results, memo, stats } = body;
 
   const doc = await getDoc();
-  
-  // 1. 記事シートの更新
   const articleSheet = doc.sheetsByIndex[0];
   const rows = await articleSheet.getRows();
   const row = rows.find((r) => r.get('id') === id);
 
   if (row) {
-    // 4つの項目を保存
     row.set('purpose', purpose);
     row.set('methods', methods);
     row.set('results', results);
@@ -56,11 +73,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
-  // 2. 学習記録シートへの追記 (新規機能)
   try {
-    const logSheet = doc.sheetsByIndex[1]; // 2枚目のシート
-    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-    
+    const logSheet = doc.sheetsByIndex[1];
+    // --- 修正後 (日本時間 JST 対応) ---
+    const now = new Date();
+    // 9時間 (9 * 60分 * 60秒 * 1000ミリ秒) を足してJSTにする
+    const jstDate = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+    const today = jstDate.toISOString().split('T')[0];
     await logSheet.addRow({
       date: today,
       article_id: id,
@@ -70,7 +89,6 @@ export async function POST(req: Request) {
     });
   } catch (e) {
     console.error("Log sheet error:", e);
-    // ログ書き込み失敗しても、ユーザーには成功を返す（メイン機能ではないため）
   }
   
   return NextResponse.json({ success: true });
